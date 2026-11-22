@@ -26,7 +26,7 @@ cmake -S "$app" -B "$build" -G Ninja \
   -DENABLE_AUDIO_MP3=OFF -DENABLE_AUDIO_OGG=OFF -DENABLE_AUDIO_WAV=OFF -DENABLE_AUDIO_FLAC=OFF \
   -DNEXUS_REPORT_CONFIG_DIR="${NEXUS_REPORT_CONFIG_DIR:-}" \
   -DNEXUS_BUNDLED_PROBE=OFF -DNEXUS_PRIVATE_KEY_INCLUDE_DIR= \
-  -Dsphaira_VERSION_OVERRIDE="${NEXUS_VERSION:-0.2.28-smb.2}"
+  -Dsphaira_VERSION_OVERRIDE="${NEXUS_VERSION:-0.2.28-smb.3}"
 if [ "${1:-}" != '--configure-only' ]; then
   cmake --build "$build" --parallel "$jobs" --target sphaira_nro
 fi

@@ -1,4 +1,8 @@
 {
+  "Start the installed SMB service for this session?": "¿Iniciar el servicio SMB instalado para esta sesión?",
+  "Start SMB service": "Iniciar servicio SMB",
+  "Horizon could not start the SMB service or the service did not respond.": "Horizon no ha podido iniciar el servicio SMB o el servicio no ha respondido.",
+  "The SMB service is running and responded.": "El servicio SMB está en ejecución y ha respondido.",
   "Starting folder": "Carpeta inicial",
   "Example: /Games": "Ejemplo: /Juegos",
   "Folder to open inside this share. Use / for the root.": "Carpeta que se abre dentro del recurso compartido. Usa / para abrir la raíz.",

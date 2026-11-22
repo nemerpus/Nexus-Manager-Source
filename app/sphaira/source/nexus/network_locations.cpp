@@ -279,6 +279,33 @@ void ChooseInstallDestination(SessionPtr session,const Entry& item){
 }
 namespace smbmount = nexus::smbmount;
 
+// Ask Horizon to start the installed provider on demand. The fixed title ID
+// belongs to mt:store. No boot profile or global autostart flag is required.
+Result OpenResidentStore(smbmount::Store& store, smbmount::Status& status, ProgressBox* p) {
+    Result rc=store.Query(status);
+    if(rc!=nexus::Unavailable)return rc;
+    struct stat file{};
+    if(stat("sdmc:/atmosphere/contents/42000000004D5453/exefs.nsp",&file) || !S_ISREG(file.st_mode))return rc;
+    R_TRY(p->ShouldExitResult());
+    rc=pmshellInitialize();
+    nexus::Log("smb-pm-open",rc);
+    R_TRY(rc);
+    const NcmProgramLocation location{UINT64_C(0x42000000004D5453),NcmStorageId_None,{}};
+    u64 pid{};
+    const auto launch=pmshellLaunchProgram(0,&location,&pid);
+    pmshellExit();
+    nexus::Log("smb-provider-launch",launch,pid);
+    // A second requester may already be launching the same program.
+    for(unsigned attempt=0;attempt<30;++attempt){
+        R_TRY(p->ShouldExitResult());
+        rc=store.Query(status);
+        if(rc!=nexus::Unavailable)break;
+        svcSleepThread(100'000'000);
+    }
+    nexus::Log("smb-provider-query-after-launch",rc,pid);
+    return rc==nexus::Unavailable && R_FAILED(launch) ? launch : rc;
+}
+
 void ReviewMountedGame(u64 generation) {
     auto scan = std::make_shared<nexusapp::UsbImportScan>();
     App::Push<ProgressBox>(0, "Check mounted SMB game"_nx, "", [=](ProgressBox* p) {
@@ -326,7 +353,7 @@ void MountGame(SessionPtr session, const Entry& item) {
     App::Push<ProgressBox>(0, "Mount XCI from SMB"_nx, Leaf(item.path), [=](ProgressBox* p)->Result {
         *detail = "The resident SMB service and compatible Nexus firmware must both be running."_nx;
         smbmount::Store store;
-        R_TRY(store.Query(*status));
+        R_TRY(OpenResidentStore(store,*status,p));
         *detail = "Unmount the current SMB image, disconnect the physical USB drive and finish pending transfers or recovery."_nx;
         R_UNLESS(status->state == smbmount::State::Empty && nexus::transfer::Active() == nexus::transfer::Mode::Off, nexus::Unavailable);
         R_TRY(nexus::CheckUsbMutationAllowed());
@@ -395,8 +422,22 @@ void ManageMountedGame() {
     smbmount::Status status;
     smbmount::Store store;
     const auto rc = store.Query(status);
+    if(rc==nexus::Unavailable){
+        App::Push<OptionBox>("Start the installed SMB service for this session?"_nx,
+            "Cancel"_nx,"Start"_nx,0,[](auto choice){
+                if(!choice||*choice!=1)return;
+                App::Push<ProgressBox>(0,"Start SMB service"_nx,"",[](ProgressBox* p){
+                    smbmount::Store service;smbmount::Status state;
+                    return OpenResidentStore(service,state,p);
+                },[](Result result){
+                    if(R_FAILED(result))App::PushErrorBox(result,"Horizon could not start the SMB service or the service did not respond."_nx);
+                    else Message("The SMB service is running and responded."_nx);
+                },ProgressBoxOption::None,nexus::safety::Operation::MayWrite);
+            });
+        return;
+    }
     if (R_FAILED(rc)) { App::PushErrorBox(rc, "The resident SMB service is unavailable."_nx); return; }
-    if (status.state == smbmount::State::Empty) { Message("No SMB image is mounted."_nx); return; }
+    if (status.state == smbmount::State::Empty) { Message(std::string("The SMB service is running and responded."_nx)+"\n"+"No SMB image is mounted."_nx); return; }
     if (status.leases) { Message("The mounted SMB image is in use. Close the game before unmounting."_nx); return; }
     auto menu=std::make_unique<Sidebar>("Mounted SMB image"_nx, Sidebar::Side::RIGHT);
     if (status.state == smbmount::State::Ready)

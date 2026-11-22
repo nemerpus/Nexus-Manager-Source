@@ -1,4 +1,8 @@
 {
+  "Start the installed SMB service for this session?": "Start the installed SMB service for this session?",
+  "Start SMB service": "Start SMB service",
+  "Horizon could not start the SMB service or the service did not respond.": "Horizon could not start the SMB service or the service did not respond.",
+  "The SMB service is running and responded.": "The SMB service is running and responded.",
   "Starting folder": "Starting folder",
   "Example: /Games": "Example: /Games",
   "Folder to open inside this share. Use / for the root.": "Folder to open inside this share. Use / for the root.",

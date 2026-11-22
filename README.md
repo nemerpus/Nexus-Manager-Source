@@ -1,8 +1,10 @@
 # Nexus Manager
 
-## SMB direct mount fork · 0.2.28-smb.2
+## SMB direct mount fork · 0.2.28-smb.3
 
 Saved network locations can open a specific directory inside a share. Highlight a saved location, press X, choose **Edit connection**, change **Starting folder** and save. Existing locations open at the root by default.
+
+To check an installed resident provider after HOME starts, open **SMB / NFS → Mounted SMB image**. When prompted, Manager asks Horizon to launch the provider and waits for its IPC response. The diagnostic log in `switch/nexusmanager/nexus.log` records the launch result separately from the service handshake. Opening an XCI also requests the provider when necessary. A working firmware bridge is still required to register or play a mounted title.
 
 In File manager, open an SMB share, select an uncompressed XCI and choose **Mount XCI from SMB**. The resident service opens the selected file read-only and keeps its connection when Manager exits. Manager compares ranges from both connections, checks game metadata, and offers HOME registration for eligible titles. Registration uses the existing Nexus content, ownership and ticket checks. If a restart is requested, mount the same XCI again before opening the game from HOME.
 

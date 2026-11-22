@@ -10,7 +10,7 @@ sh tools/setup-libnx.sh
 sh build-nexus-wsl.sh
 ```
 
-`setup-libnx.sh` verifies and builds the pinned libnx source into `dependencies/sdk/libnx`. It also stages the installed deko3d headers and libraries separately. `build-nexus-wsl.sh` enables SMB and NFS, uses the vendored dependency revisions and builds version 0.2.28-smb.2 by default. Set `NEXUS_BUILD_JOBS` to control parallelism. The fork restores the upstream v1.5.7 zstd CMake files needed by the offline build.
+`setup-libnx.sh` verifies and builds the pinned libnx source into `dependencies/sdk/libnx`. It also stages the installed deko3d headers and libraries separately. `build-nexus-wsl.sh` enables SMB and NFS, uses the vendored dependency revisions and builds version 0.2.28-smb.3 by default. Set `NEXUS_BUILD_JOBS` to control parallelism. The fork restores the upstream v1.5.7 zstd CMake files needed by the offline build.
 
 The NRO is written to `app/build/NexusPorts/switch/nexusmanager/NexusManager.nro`. No console key is embedded in the default build. Keep raw USB mounting disabled: Nexus firmware owns the drive.
 
