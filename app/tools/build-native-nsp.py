@@ -5,10 +5,30 @@ The receipt contains local build provenance and must not be published.
 """
 from pathlib import Path
 import argparse,hashlib,importlib.util,json,re,shutil,struct,subprocess,sys,tempfile
+from contextlib import contextmanager
 
 APP=Path(__file__).resolve().parents[1]
 TITLE='05004e584d470000'
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+
+@contextmanager
+def packing_keyset(path):
+    # Older packing tools abort on unrelated entries in newer key files.
+    # This NSP uses key generation 1. Keep the full input for the secret scan.
+    lengths = {'header_key':64, 'key_area_key_application_00':32}
+    entries = {}
+    for line in path.read_text(encoding='utf-8-sig').splitlines():
+        name, sep, value = line.partition('=')
+        name, value = name.strip(), value.strip()
+        if sep and name in lengths and re.fullmatch(r'[0-9a-fA-F]+',value) and len(value)==lengths[name]:
+            entries[name] = value
+    if entries.keys() != lengths.keys():
+        yield path  # Allow the tool to derive missing keys from the supplied inputs.
+        return
+    with tempfile.TemporaryDirectory(prefix='nexus-pack-input-') as directory:
+        with tempfile.NamedTemporaryFile(mode='w',dir=directory,delete=False) as subset:
+            subset.writelines(f'{k} = {v}\n' for k,v in entries.items())
+        yield Path(subset.name)
 def run(tool,args,cwd):
     result=subprocess.run([str(tool),*map(str,args)],cwd=cwd,stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL,timeout=120,
@@ -27,7 +47,8 @@ def main():
         setattr(a,attr,getattr(a,attr).resolve())
     assert not a.output.exists() and not a.receipt.exists(),'Do not overwrite artifacts'
     elf=a.build/'sphaira/sphaira.elf';nro=a.build/'switch/nexusmanager/NexusManager.nro'
-    tools={n:a.tool_dir/(n+'.exe') for n in ('elf2nso','npdmtool','hactool')}
+    suffix = '.exe' if sys.platform == 'win32' else ''
+    tools={n:a.tool_dir/(n+suffix) for n in ('elf2nso','npdmtool','hactool')}
     for p in (elf,nro,a.keys,a.packer,*tools.values()):assert p.is_file(),p.name
     data=nro.read_bytes();elf_data=elf.read_bytes()
     assert data[16:20]==b'NRO0' and elf_data[:4]==b'\x7fELF'
@@ -57,6 +78,12 @@ def main():
     assert next(c for c in cfg['kernel_capabilities'] if c['type']=='application_type')['value']==1
     (stage/'native.json').write_text(json.dumps(cfg,indent=2))
     run(tools['npdmtool'],[stage/'native.json',stage/'exefs/main.npdm'],stage)
+    # Prepare the native title's control metadata before packing so different
+    # packer versions produce the same title IDs and application flags.
+    tid=int(TITLE,16)
+    for off in (0x3038,0x3078,*range(0x30b0,0x30f0,8)):struct.pack_into('<Q',nacp,off,tid)
+    struct.pack_into('<Q',nacp,0x3070,tid+0x1000)
+    nacp[0x30f1]=nacp[0x3212]=nacp[0x34d1]=0;struct.pack_into('<I',nacp,0x34d4,1)
     (stage/'control/control.nacp').write_bytes(nacp)
     (stage/'control/icon_AmericanEnglish.dat').write_bytes(asset(8))
     (stage/'program.romfs').write_bytes(asset(40))
@@ -64,7 +91,10 @@ def main():
     files={p.relative_to(stage/'romfs').as_posix():sha(p) for p in (stage/'romfs').rglob('*') if p.is_file()}
     assert files and any(n.startswith('shaders/') for n in files)
     assert not any(Path(n).suffix.lower()=='.nro' or Path(n).name in ('nextNroPath','nextArgv') for n in files)
-    run(a.packer,['--keyset',a.keys,'--titleid',TITLE,'--keepncadir'],stage)
+    with packing_keyset(a.keys) as keyset:
+        # The generated NPDM already sets TITLE. An override also rewrites the
+        # NACP, which must remain byte-identical to the prepared native copy.
+        run(a.packer,['--keyset',keyset,'--nopatchnacplogo','--keepncadir'],stage)
     package=stage/'hacbrewpack_nsp'/(TITLE+'.nsp');assert package.is_file()
     spec=importlib.util.spec_from_file_location('pfs_helpers',APP/'tools/build-home-nsp.py')
     helpers=importlib.util.module_from_spec(spec);spec.loader.exec_module(helpers)
@@ -73,18 +103,15 @@ def main():
     exefs=stage/'verified/exefs';romfs=stage/'verified/romfs'
     for p in ncas:
         assert p.name[:32]==sha(p)[:32]
-        run(tools['hactool'],['-x','--disablekeywarns','--suppresskeys','-k',a.keys,
-            '--exefsdir='+str(exefs),'--romfsdir='+str(romfs),p],stage)
+        with packing_keyset(a.keys) as keyset:
+            run(tools['hactool'],['-x','--disablekeywarns','--suppresskeys','-k',keyset,
+                '--exefsdir='+str(exefs),'--romfsdir='+str(romfs),p],stage)
     assert sha(exefs/'main')==sha(stage/'exefs/main')
     assert sha(exefs/'main.npdm')==sha(stage/'exefs/main.npdm')
     sys.path.insert(0,str(APP/'tests'))
     from forwarder_npdm_tests import verify_npdm
     verify_npdm((exefs/'main.npdm').read_bytes(),int(TITLE,16))
     for name,digest in files.items():assert sha(romfs/name)==digest,name
-    tid=int(TITLE,16)
-    for off in (0x3038,0x3078,*range(0x30b0,0x30f0,8)):struct.pack_into('<Q',nacp,off,tid)
-    struct.pack_into('<Q',nacp,0x3070,tid+0x1000)
-    nacp[0x30f1]=nacp[0x3212]=nacp[0x34d1]=0;struct.pack_into('<I',nacp,0x34d4,1)
     assert (romfs/'control.nacp').read_bytes()==nacp
     assert (romfs/'icon_AmericanEnglish.dat').read_bytes()==asset(8)
     run(tools['hactool'],['-t','nso0','--uncompressed='+str(stage/'main-uncompressed.nso'),exefs/'main'],stage)

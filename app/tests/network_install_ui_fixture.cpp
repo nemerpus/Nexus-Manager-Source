@@ -15,6 +15,7 @@
 #include <type_traits>
 #include <vector>
 #include "nexus/network_location_core.hpp"
+#include "nexus/smb_mount.hpp"
 #include "nexus/package.hpp"
 #include "nexus/network_browser_model.hpp"
 #include "nexus/network_session_passwords.hpp"
@@ -97,6 +98,7 @@ struct OptionBox{
     OptionBox(std::string text,std::string left,std::string right,int selected,Callback cb):message(std::move(text)),left(std::move(left)),right(std::move(right)),selected(selected),callback(std::move(cb)){}
 };
 struct ProgressBox{
+    void SetItem(const std::string& item){title=item;}
     std::string action,title;std::function<Result(ProgressBox*)> work;std::function<void(Result)> done;nexus::safety::Operation operation;bool cancelled{};
     ProgressBox(int,std::string action,std::string title,std::function<Result(ProgressBox*)> work,std::function<void(Result)> done,
         ProgressBoxOption=ProgressBoxOption::None,nexus::safety::Operation operation=nexus::safety::Operation::MayWrite)
@@ -186,6 +188,10 @@ public:
 void Browse(SessionPtr,const std::string&,BrowserState state={});
 void Locations(const std::string&,bool);
 void Destination(SessionPtr,const std::string&,const std::string&,size_t=0){++state::copies;}
+namespace smbmount = nexus::smbmount;
+int mount_requests{};
+void MountGame(SessionPtr,const Entry&){++mount_requests;}
+void ManageMountedGame(){}
 // FUNCTIONS_PRODUCTION
 }
 // DISPLAY_PRODUCTION
@@ -221,6 +227,16 @@ void Pick(){App::Select("game.nsp");assert(App::sidebar->title=="Picked file"&&A
 void Preflight(const std::string& destination){Pick();App::Select(destination);assert(App::progress&&App::progress->operation==nexus::safety::Operation::ReadOnly);App::Run();}
 // QUEUE_UI_CASES
 int main(){
+    for(const auto* protocol:{"SMB","NFS"}){
+        auto session=std::make_shared<Session>();session->protocol=protocol;
+        PickPackage(session,{"/Game.XCI",4096,false,{}});
+        assert(App::Has("Install picked file"));
+        assert(App::Has("Mount XCI from SMB")==(session->protocol=="SMB"));
+        if(session->protocol=="SMB")App::Select("Mount XCI from SMB");
+        PickPackage(session,{"/Game.nsp",4096,false,{}});
+        assert(!App::Has("Mount XCI from SMB"));
+    }
+    assert(mount_requests==1);
     // Home SMB/NFS is a general browser; packages still install directly,
     // while unrelated files remain available for normal file browsing.
     Reset();Connect(state::connections.front(),"test-session-only",false);App::Run();App::Run();

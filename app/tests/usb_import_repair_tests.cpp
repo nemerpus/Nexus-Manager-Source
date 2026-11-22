@@ -14,6 +14,7 @@
 #include <vector>
 #include <openssl/sha.h>
 #include "nexus/usb_import_scan_core.hpp"
+#include "nexus/smb_mount.hpp"
 #include "nexus/usb_import_diagnostic.hpp"
 #include "nexus/index_repair_core.hpp"
 #include "nexus/badge_format.hpp"
@@ -172,6 +173,20 @@ UsbImportTitle InstalledOnly(const UsbImportTitle& source,u64 id,u64 application
 }
 void RetailUsb(const UsbImportTitle& row){world.cnmts[row.record.content.front().info.content_id]=Cnmt(row);UsbFiles();}
 int Main(){
+    {
+        Reset(); auto game=Row(); RetailUsb(game);
+        std::vector<nexus::Entry> flat;
+        for(const auto& [path,entries]:world.lists)
+            if(path!="/registered")flat.insert(flat.end(),entries.begin(),entries.end());
+        world.lists.clear();world.lists["/registered"]=flat;
+        REQUIRE(!flat.empty());
+        UsbImportScan usb,image;
+        REQUIRE(!ScanUsbImports(nullptr,usb,7,nullptr,false) && usb.nca_files==0);
+        const u64 generation=nexus::smbmount::GenerationBit|7;
+        REQUIRE(!ScanUsbImports(nullptr,image,generation,nullptr,false));
+        REQUIRE(image.complete && image.generation==generation && image.nca_files==flat.size());
+        REQUIRE(!image.titles.empty() && image.titles.front().record.application_id==game.record.application_id);
+    }
     // Empty or absent /registered is a successful no-op even if the installed
     // database cannot open. No ticket, map, HOME or installation mutation.
     for(bool folder:{false,true}){Reset();world.open_result=Fault;if(folder)world.lists["/registered"]={};UsbImportScan empty;

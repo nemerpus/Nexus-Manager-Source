@@ -1,4 +1,5 @@
 #include "nexus/localize.hpp"
+#include "nexus/smb_mount.hpp"
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "nexus/usb_import_scan.hpp"
 #include "nexus/usb_import_scan_core.hpp"
@@ -640,19 +641,28 @@ Result ScanUsbImports(ui::ProgressBox* progress,UsbImportScan& scan,u64 expected
     if(list_result==MissingUsb){R_TRY(s.Check());scan.complete=true;scan.detail="No registered content folder was found on this USB drive. Nothing was changed."_nx;return 0;}R_TRY(list_result);
     R_UNLESS(directories.size()<=MaxFiles,nexus::Invalid);
     std::vector<File> files;std::set<Id> seen_files;
+    // The persistent SMB image exposes flat names and also resolves their
+    // canonical NCM paths. Physical USB must still pass its bucket checks.
+    const bool flat_image = (scan.generation & nexus::smbmount::GenerationBit) != 0;
+    auto collect = [&](const nexus::Entry& entry, int bucket)->Result {
+        if(entry.directory)return 0;
+        Id id{};if(!core::ContentName(entry.name,id))return 0;
+        R_UNLESS(files.size()+scan.unresolved_ownership.size()<MaxFiles,nexus::Invalid);
+        File file{};std::memcpy(&file.id,id.data(),id.size());
+        file.path=CanonicalUsbContentPath(file.id);file.size=entry.size;
+        u8 hash[32]{};sha256CalculateHash(hash,&file.id,sizeof(file.id));
+        if((bucket>=0 && hash[0]!=bucket)||!seen_files.insert(id).second){
+            ++scan.unreadable_ncas;scan.unresolved_ownership.push_back(file.id);return 0;
+        }
+        files.push_back(std::move(file));return 0;
+    };
     for(const auto& directory:directories){
+        if(flat_image){R_TRY(collect(directory,-1));continue;}
         R_TRY(s.Check());const std::string name=directory.name;
         if(!directory.directory||name.size()!=8||!std::all_of(name.begin(),name.end(),[](char c){return core::Hex(c)>=0;}))continue;
         u32 bucket{};for(char c:name)bucket=(bucket<<4)|core::Hex(c);if(bucket>255)continue;
         std::vector<nexus::Entry> entries;R_TRY(s.usb.List(scan.generation,"/registered/"+name,entries));
-        for(const auto& entry:entries){
-            if(entry.directory)continue;
-            Id id{};if(!core::ContentName(entry.name,id))continue;
-            R_UNLESS(files.size()+scan.unresolved_ownership.size()<MaxFiles,nexus::Invalid);File file{};std::memcpy(&file.id,id.data(),id.size());file.path=CanonicalUsbContentPath(file.id);file.size=entry.size;
-            u8 hash[32]{};sha256CalculateHash(hash,&file.id,sizeof(file.id));
-            if(hash[0]!=bucket||!seen_files.insert(id).second){++scan.unreadable_ncas;scan.unresolved_ownership.push_back(file.id);continue;}
-            files.push_back(std::move(file));
-        }
+        for(const auto& entry:entries){R_TRY(collect(entry,static_cast<int>(bucket)));}
     }
     scan.nca_files=files.size();
     if(files.empty()){
@@ -719,7 +729,8 @@ std::string UsbImportPreview(const UsbImportScan& scan){
     if(!scan.complete)return "USB check could not finish. Game health and ticket status are not confirmed. Nothing was changed.\n\n"_nx+scan.detail;
     size_t ready{},registered{},incomplete{},tickets{};
     for(const auto& row:scan.titles)switch(row.status){case UsbImportStatus::Ready:++ready;break;case UsbImportStatus::AlreadyRegistered:++registered;break;case UsbImportStatus::Incomplete:++incomplete;break;case UsbImportStatus::TicketMissing:++tickets;break;}
-    std::string result="USB library preview\n\n"_nx+std::to_string(ready)+" ready to import; "_nx+std::to_string(registered)+" already registered; "_nx+std::to_string(incomplete)+" incomplete or conflicting; "_nx+std::to_string(tickets)+" missing tickets.\n\n"_nx;
+    const auto heading = scan.generation & nexus::smbmount::GenerationBit ? "SMB library preview\n\n"_nx : "USB library preview\n\n"_nx;
+    std::string result=heading+std::to_string(ready)+" ready to import; "_nx+std::to_string(registered)+" already registered; "_nx+std::to_string(incomplete)+" incomplete or conflicting; "_nx+std::to_string(tickets)+" missing tickets.\n\n"_nx;
     if(scan.unreadable_ncas)result+=std::to_string(scan.unreadable_ncas)+" content files could not be identified or read. They were not treated as complete games.\n\n"_nx;
     if(scan.titles.empty())result+=scan.nca_files?"This drive contains NCA files, but no supported game metadata could be identified. It has not been treated as an empty drive.\n\n"_nx:"No registered game content was found.\n\n"_nx;
     return result+scan.detail+"\n\nSaves stay in the current system and are not imported."_nx;

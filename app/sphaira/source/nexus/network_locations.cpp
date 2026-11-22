@@ -7,6 +7,9 @@
 #include "nexus/network_socket_config.hpp"
 #include "nexus/network_source.hpp"
 #include "nexus/network_install.hpp"
+#include "nexus/smb_mount_client.hpp"
+#include "nexus/usb_import.hpp"
+#include "nexus/usb_library_startup.hpp"
 #include "nexus/smb_discovery.hpp"
 #include "nexus/network_shares.hpp"
 #include "nexus/package.hpp"
@@ -43,6 +46,7 @@ constexpr Result IoError=MAKERESULT(Module_Libnx,LibnxError_IoError);
 constexpr const char* ConfigPath="sdmc:/config/nexusmanager/network.ini";
 nexus::network::SessionPasswords session_passwords;
 struct Session {
+    Connection endpoint;
     fs::FsPath mount;std::string name,protocol;bool sockets{},network{},installing{};
     Result Open(std::string* detail=nullptr){
         if(detail)detail->clear();
@@ -271,9 +275,142 @@ void ChooseInstallDestination(SessionPtr session,const Entry& item){
     menu->Add<SidebarEntryCallback>("USB Drive"_nx,[=]{PrepareInstall(session,item,nexus::Target::Usb);},"Install the game directly from your NAS to the connected USB drive."_nx);
     App::Push(std::move(menu));
 }
+namespace smbmount = nexus::smbmount;
+
+void ReviewMountedGame(u64 generation) {
+    auto scan = std::make_shared<nexusapp::UsbImportScan>();
+    App::Push<ProgressBox>(0, "Check mounted SMB game"_nx, "", [=](ProgressBox* p) {
+        return nexusapp::ScanUsbImports(p, *scan, generation);
+    }, [=](Result rc) {
+        if (R_FAILED(rc)) {
+            App::PushErrorBox(rc, "The image is mounted. Game metadata could not be verified."_nx + std::string("\n") + scan->detail);
+            return;
+        }
+        const auto plan = nexusapp::PlanUsbLibrary(*scan);
+        if (!plan.summary.selected_items) {
+            Message(nexusapp::UsbImportPreview(*scan));
+            return;
+        }
+        App::Push<OptionBox>(nexusapp::UsbImportPreview(*scan) + "\n\n" +
+            "Register the verified titles on HOME? Their game data stays on the NAS."_nx,
+            "Cancel"_nx, "Register"_nx, 0, [=](auto choice) {
+                if (!choice || *choice != 1) return;
+                auto result = std::make_shared<nexusapp::UsbImportResult>();
+                App::Push<ProgressBox>(0, "Register mounted SMB game"_nx, "", [=](ProgressBox* p) {
+                    return nexusapp::ImportUsbLibrary(p, *scan, *result);
+                }, [=](Result rc) {
+                    if (R_FAILED(rc)) App::PushErrorBox(rc, result->detail);
+                    else Message(result->detail + "\n\n" +
+                        "After a restart, mount the same XCI again before opening its HOME entry."_nx);
+                }, ProgressBoxOption::None, nexus::safety::Operation::MayWrite);
+            });
+    }, ProgressBoxOption::None, nexus::safety::Operation::ReadOnly);
+}
+
+void MountGame(SessionPtr session, const Entry& item) {
+    auto config = std::make_shared<smbmount::Config>();
+    std::string password;
+    if (!KnownPassword(session->endpoint, password) && !session->endpoint.user.empty()) {
+        Message("Reconnect to the SMB location to confirm the current login."_nx);
+        return;
+    }
+    if (!smbmount::Configure(*config, session->endpoint, password, item.path)) {
+        Message("The resident service accepts a share-local account and a single XCI. Check the domain and field lengths."_nx);
+        return;
+    }
+    nexusapp::StopUsbLibraryStartupCheck();
+    auto status = std::make_shared<smbmount::Status>();
+    auto detail = std::make_shared<std::string>();
+    App::Push<ProgressBox>(0, "Mount XCI from SMB"_nx, Leaf(item.path), [=](ProgressBox* p)->Result {
+        *detail = "The resident SMB service and compatible Nexus firmware must both be running."_nx;
+        smbmount::Store store;
+        R_TRY(store.Query(*status));
+        *detail = "Unmount the current SMB image, disconnect the physical USB drive and finish pending transfers or recovery."_nx;
+        R_UNLESS(status->state == smbmount::State::Empty && nexus::transfer::Active() == nexus::transfer::Mode::Off, nexus::Unavailable);
+        R_TRY(nexus::CheckUsbMutationAllowed());
+        nexus::Client route;
+        nexus::Status media{};
+        R_TRY(route.Query(media));
+        // The firmware can keep its filesystem mounted while waiting for a
+        // drive. Only a ready medium occupies the external slot.
+        R_UNLESS(!media.ready && media.state != 4, nexus::Unavailable);
+        *detail = "The selected NAS file changed or could not be read."_nx;
+        nexus::network::Source browser(session->mount.toString(), [p]{ return !p->ShouldExit() && nexus::lifecycle::CanPoll(); });
+        Entry current; bool exists{};
+        R_UNLESS(!browser.Stat(item.path, current, exists) && exists && !current.directory && current.size == item.size, IoError);
+        R_UNLESS(!browser.BeginRead(item.path), IoError);
+        R_TRY(p->ShouldExitResult());
+        *detail = "The resident service could not open this XCI. Check its SMB login and image format."_nx;
+        R_TRY(store.Attach(*config, *status));
+        const auto generation = status->generation;
+        *detail = "The firmware could not read matching data from this SMB image."_nx;
+        const Result verified = [&]() -> Result {
+            R_UNLESS(status->size == item.size, nexus::Invalid);
+            // A passive status query cannot start the firmware's filesystem.
+            // Stat is generation-pinned and invokes its normal startup path.
+            nexus::Info root{};
+            R_TRY(route.Stat(generation, "/registered", root));
+            R_UNLESS(root.directory == 1, nexus::Invalid);
+            R_TRY(route.Check(generation));
+            const bool matched = smbmount::SameSamples(item.size,
+                [&](u64 offset, void* data, size_t size) {
+                    std::uint64_t actual{};
+                    return !browser.Read(item.path, offset, data, size, actual) && actual == size;
+                }, [&](u64 offset, void* data, size_t size) {
+                    u64 actual{};
+                    return R_SUCCEEDED(route.Read(generation, "/__image.xci", offset, data, size, actual)) && actual == size;
+                });
+            R_TRY(p->ShouldExitResult());
+            R_UNLESS(matched, IoError);
+            return route.Check(generation);
+        }();
+        if (R_FAILED(verified) && R_FAILED(store.Detach(generation)))
+            *detail += std::string("\n") + "Open Mounted SMB image to check the remaining mount."_nx;
+        return verified;
+    }, [=](Result rc) {
+        if (R_FAILED(rc)) App::PushErrorBox(rc, *detail);
+        else ReviewMountedGame(status->generation);
+    }, ProgressBoxOption::None, nexus::safety::Operation::MayWrite);
+}
+
+void ConfirmUnmount(u64 generation) {
+    App::Push<OptionBox>("Unmount this SMB image and release the network connection?"_nx,
+        "Cancel"_nx, "Unmount"_nx, 0, [generation](auto choice) {
+            if (!choice || *choice != 1) return;
+            smbmount::Store current;
+            smbmount::Status latest;
+            auto result = current.Query(latest);
+            if (R_SUCCEEDED(result)) {
+                if (latest.state == smbmount::State::Empty || latest.generation != generation || latest.leases) result = nexus::Unavailable;
+                else result = current.Detach(generation);
+            }
+            if (R_FAILED(result)) App::PushErrorBox(result, "The mount changed or is still in use."_nx);
+            else App::Notify("SMB image unmounted."_nx);
+        });
+}
+
+void ManageMountedGame() {
+    smbmount::Status status;
+    smbmount::Store store;
+    const auto rc = store.Query(status);
+    if (R_FAILED(rc)) { App::PushErrorBox(rc, "The resident SMB service is unavailable."_nx); return; }
+    if (status.state == smbmount::State::Empty) { Message("No SMB image is mounted."_nx); return; }
+    if (status.leases) { Message("The mounted SMB image is in use. Close the game before unmounting."_nx); return; }
+    auto menu=std::make_unique<Sidebar>("Mounted SMB image"_nx, Sidebar::Side::RIGHT);
+    if (status.state == smbmount::State::Ready)
+        menu->Add<SidebarEntryCallback>("Check mounted SMB game"_nx,
+            [generation=status.generation]{ReviewMountedGame(generation);},true);
+    menu->Add<SidebarEntryCallback>("Unmount"_nx,
+        [generation=status.generation]{ConfirmUnmount(generation);},true);
+    App::Push(std::move(menu));
+}
+
 void PickPackage(SessionPtr session,const Entry& item){
     auto menu=std::make_unique<Sidebar>("Picked file"_nx,Leaf(item.path),Sidebar::Side::RIGHT);
     menu->Add<SidebarEntryCallback>("Install picked file"_nx,[=]{ChooseInstallDestination(session,item);},"Next choose SD Card or USB Drive. The original file stays on the NAS."_nx);
+    if (session->protocol == "SMB" && smbmount::Supported(item.path))
+        menu->Add<SidebarEntryCallback>("Mount XCI from SMB"_nx,[=]{MountGame(session,item);},
+            "Keep game data on the NAS and use the resident service to read it during play."_nx);
     App::Push(std::move(menu));
 }
 struct NetworkQueueRecord {
@@ -475,6 +612,7 @@ void Connect(const Connection& c,const std::string& password,bool installing=fal
     if(!nexus::network::Valid(c)){Message("Enter a location name, server hostname or IPv4 address, and share. SMB needs a share name such as Games. NFS needs the full export path such as /srv/games. Do not put a URL or login details in the server field."_nx);return;}
     session_passwords.Remember(c,password);
     auto session=std::make_shared<Session>();session->name=c.name;session->protocol=c.protocol;session->installing=installing;auto detail=std::make_shared<std::string>();
+    session->endpoint=c;
     common::MountConfig config;config.name=c.name;config.url=nexus::network::Url(c);config.user=c.user;config.pass=password;config.read_only=true;config.no_stat_file=false;config.no_stat_dir=false;
     config.timeout=c.protocol=="SMB"?10:10000;config.extra["domain"]=c.domain;
     App::Push<ProgressBox>(0,"Connecting"_nx,c.name,[=](ProgressBox* p)->Result{
@@ -623,6 +761,9 @@ class NetworkLocationsSidebar final:public Sidebar {
     const std::string protocol_;const bool installing_;bool focused_once{};
     void Populate(){
     const auto protocol=protocol_;const auto installing=installing_;auto* menu=this;
+    if (protocol.empty() || protocol == "SMB")
+        menu->Add<SidebarEntryCallback>("Mounted SMB image"_nx, []{ManageMountedGame();},
+            "Check the resident image or unmount it after closing the game."_nx);
     menu->Add<SidebarEntryCallback>(protocol.empty()?"Scan for SMB and NFS servers"_nx:"Scan for "_nx+protocol+" servers"_nx,[=]{DiscoverNetwork(installing,protocol);},"Scan the entire connected IPv4 subnet. Press B to stop and use the servers found so far."_nx);
     menu->Add<SidebarEntryCallback>("Add SMB location"_nx,[=]{Connection c;c.protocol="SMB";App::Push<ConnectionForm>(c,installing);});
     menu->Add<SidebarEntryCallback>("Add NFS location"_nx,[=]{Connection c;c.protocol="NFS";App::Push<ConnectionForm>(c,installing);});

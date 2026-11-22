@@ -1,8 +1,16 @@
 # Nexus Manager
 
+## SMB direct mount fork · 0.2.28-smb.1
+
+In File manager, open an SMB share, select an uncompressed XCI and choose **Mount XCI from SMB**. The resident service opens the selected file read-only and keeps its connection when Manager exits. Manager compares ranges from both connections, checks game metadata, and offers HOME registration for eligible titles. Registration uses the existing Nexus content, ownership and ticket checks. If a restart is requested, mount the same XCI again before opening the game from HOME.
+
+Direct mount requires the **mt:store v1** persistent image service and the matching **ams:usb SMB bridge** in the running firmware. The application packages contain Manager only. The v1 service supports one uncompressed XCI, a share-local account or guest access, and one external medium at a time. To change images or return to USB, close the game and choose **SMB / NFS → Mounted SMB image → Unmount**. Use the ordinary network installation workflow for NSP, NSZ, XCZ, NFS or SMB domain accounts.
+
+The application builds with the existing NRO location and native NSP title ID. Installing either build in place replaces that copy of Manager. The upstream updater still serves upstream releases. The combined application archive contains the NRO and the standalone NSP. Hekate, boot assets and firmware are installed independently.
+
 Nexus Manager is the Switch app for managing games across SD and USB storage. It provides game installation and moves, USB library import and repair, a file manager, network installation over SMB/NFS, and app updates.
 
-This repository contains the 0.2.28 application source, assets, dependencies, build scripts and tests. Installable NSP and NRO updates are published separately in [Nexus Manager releases](https://github.com/TechRepairs4U/Nexus-Manager/releases/tag/v0.2.28).
+The upstream 0.2.28 application and original release binaries are available from [Nexus Manager releases](https://github.com/TechRepairs4U/Nexus-Manager/releases/tag/v0.2.28).
 
 ## What's new since 0.2.24
 

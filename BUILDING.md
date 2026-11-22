@@ -3,14 +3,14 @@
 Use Linux or WSL, devkitPro devkitA64, CMake, Ninja, Make, Python 3 and Git. Install the Switch portlibs used by curl, zlib, minizip and mbedTLS, plus deko3d, uam and the usual Switch build tools. The SDK must support `NacpStruct.lang_data`; a pinned libnx source tree is included for that reason.
 
 ```sh
-git clone https://github.com/TR4UNEXUS/Nexus-Manager-Source.git
+git clone --branch feature/smb-direct-mount https://github.com/nemerpus/Nexus-Manager-Source.git
 cd Nexus-Manager-Source/app
 export DEVKITPRO=/opt/devkitpro
 sh tools/setup-libnx.sh
 sh build-nexus-wsl.sh
 ```
 
-`setup-libnx.sh` verifies and builds the pinned libnx source into `dependencies/sdk/libnx`. It also stages the installed deko3d headers and libraries separately. `build-nexus-wsl.sh` enables SMB and NFS, uses the vendored dependency revisions and builds version 0.2.28 by default. Set `NEXUS_BUILD_JOBS` to control parallelism.
+`setup-libnx.sh` verifies and builds the pinned libnx source into `dependencies/sdk/libnx`. It also stages the installed deko3d headers and libraries separately. `build-nexus-wsl.sh` enables SMB and NFS, uses the vendored dependency revisions and builds version 0.2.28-smb.1 by default. Set `NEXUS_BUILD_JOBS` to control parallelism. The fork restores the upstream v1.5.7 zstd CMake files needed by the offline build.
 
 The NRO is written to `app/build/NexusPorts/switch/nexusmanager/NexusManager.nro`. No console key is embedded in the default build. Keep raw USB mounting disabled: Nexus firmware owns the drive.
 
