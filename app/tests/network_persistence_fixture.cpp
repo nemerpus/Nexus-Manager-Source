@@ -49,6 +49,7 @@ extern "C" int test_rename(const char* source,const char* destination){
 
 std::string File(){std::ifstream in(ConfigPath,std::ios::binary);return {std::istreambuf_iterator<char>(in),{}};}
 void Same(const Connection& a,const Connection& b){
+    assert(a.initial_folder==b.initial_folder);
     assert(a.name==b.name&&a.protocol==b.protocol&&a.host==b.host&&a.share==b.share&&a.user==b.user&&a.domain==b.domain&&a.remember_password==b.remember_password);
 }
 void Reopens(const Connection& expected){
@@ -58,6 +59,16 @@ void Reopens(const Connection& expected){
 }
 int main(){
     const Connection original{"Living room NAS","SMB","192.168.1.20","Games","player","WORKGROUP"};
+    {
+        auto nested=original;nested.name="Nested";nested.initial_folder="/Library/My Games";
+        std::string secret="test",loaded;
+        assert(Save(nested,&secret)==0);Reopens(nested);
+        assert(ReadSavedPassword(nested,loaded)&&loaded==secret);
+        nested.initial_folder="/Library/../Games";assert(Save(nested)==nexus::Invalid);
+        nested.initial_folder="/Other";assert(Save(nested)==0);Reopens(nested);
+        assert(ReadSavedPassword(nested,loaded)&&loaded==secret);
+        assert(Forget(nested)==0);
+    }
     assert(Save(original)==0);Reopens(original);
     auto edited=original;edited.host="nas.example.test";edited.share="Switch Games";edited.user="second-user";edited.domain="HOME";
     assert(Save(edited)==0);Reopens(edited);

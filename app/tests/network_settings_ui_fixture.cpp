@@ -111,7 +111,8 @@ nexus::network::SessionPasswords disk_passwords;
 void Message(const std::string& text){state::error=text;}
 // PRODUCTION_SESSION
 using SessionPtr=std::shared_ptr<Session>;
-void Browse(SessionPtr,const std::string&){++state::browses;}
+std::string last_browsed_path;
+void Browse(SessionPtr,const std::string& path){last_browsed_path=path;++state::browses;}
 std::vector<Connection> Load(){++state::loads;return state::locations;}
 bool SavedEndpoint(const Connection& c){const auto rows=Load();return std::any_of(rows.begin(),rows.end(),[&](const auto& row){return row.name==c.name&&row.remember_password==c.remember_password&&nexus::network::SameEndpoint(row,c);});}
 bool ReadSavedPassword(const Connection& c,std::string& password){return c.remember_password&&SavedEndpoint(c)&&disk_passwords.Find(c,password);}
@@ -168,7 +169,9 @@ int main(int argc,char**){
     // Successful connections persist without pressing Save, across session
     // restart, and a second share cannot overwrite the first share's login.
     Reset();state::locations.clear();Connection first{"NAS","SMB","192.168.1.10","Games","user",""};
-    Connect(first,"remember me",true,true);App::Run();assert(state::locations.size()==1);session_passwords.Clear();std::string restored;
+    auto nested=first;nested.initial_folder="/Library/My Games";
+    Connect(nested,"remember me",true,true);App::Run();assert(last_browsed_path==nested.initial_folder);
+    Connect(first,"remember me",true,true);App::Run();assert(last_browsed_path=="/"&&state::locations.size()==1);session_passwords.Clear();std::string restored;
     assert(ReadSavedPassword(state::locations[0],restored)&&restored=="remember me");
     auto second=first;second.share="Backups";Connect(second,"second password",true,true);App::Run();assert(state::locations.size()==2&&state::locations[0].share=="Games"&&state::locations[1].name!="NAS");
     session_passwords.Clear();assert(ReadSavedPassword(state::locations[0],restored)&&restored=="remember me");assert(ReadSavedPassword(state::locations[1],restored)&&restored=="second password");

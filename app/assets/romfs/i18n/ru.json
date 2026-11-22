@@ -1,4 +1,7 @@
 {
+  "Starting folder": "Starting folder",
+  "Example: /Games": "Example: /Games",
+  "Folder to open inside this share. Use / for the root.": "Folder to open inside this share. Use / for the root.",
   "Check mounted SMB game": "Check mounted SMB game",
   "The image is mounted. Game metadata could not be verified.": "The image is mounted. Game metadata could not be verified.",
   "Register the verified titles on HOME? Their game data stays on the NAS.": "Register the verified titles on HOME? Their game data stays on the NAS.",

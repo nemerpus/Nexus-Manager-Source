@@ -1,4 +1,7 @@
 {
+  "Starting folder": "Carpeta inicial",
+  "Example: /Games": "Ejemplo: /Juegos",
+  "Folder to open inside this share. Use / for the root.": "Carpeta que se abre dentro del recurso compartido. Usa / para abrir la raíz.",
   "Check mounted SMB game": "Comprobar juego montado por SMB",
   "The image is mounted. Game metadata could not be verified.": "La imagen está montada. No se han podido verificar los metadatos del juego.",
   "Register the verified titles on HOME? Their game data stays on the NAS.": "¿Registrar los títulos verificados en HOME? Los datos del juego permanecen en el NAS.",

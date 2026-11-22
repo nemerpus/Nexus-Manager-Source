@@ -94,6 +94,7 @@ std::vector<Connection> Load(){
         if(!strcmp(key,"protocol"))c.protocol=value;else if(!strcmp(key,"host"))c.host=value;
         else if(!strcmp(key,"share"))c.share=value;else if(!strcmp(key,"user"))c.user=value;else if(!strcmp(key,"domain"))c.domain=value;
         else if(!strcmp(key,"remember_password"))c.remember_password=strcmp(value,"0")!=0;
+        else if(!strcmp(key,"initial_folder"))c.initial_folder=*value?value:"/";
         return 1;
     },&entries,ConfigPath);
     return entries;
@@ -165,7 +166,7 @@ Result Save(const Connection& c,const std::string* password=nullptr){
     R_TRY(fs::FsNativeSd().CreateDirectoryRecursively("/config/nexusmanager"));
     std::string previous;if(!password&&ReadSavedPassword(c,previous))password=&previous;
     R_TRY(ClearSavedPassword(c));
-    const std::array<std::pair<const char*,std::string>,6> values{{{"protocol",c.protocol},{"host",c.host},{"share",c.share},{"user",c.user},{"domain",c.domain},{"remember_password",c.remember_password?"1":"0"}}};
+    const std::array<std::pair<const char*,std::string>,7> values{{{"protocol",c.protocol},{"host",c.host},{"share",c.share},{"user",c.user},{"domain",c.domain},{"remember_password",c.remember_password?"1":"0"},{"initial_folder",c.initial_folder}}};
     // minIni misses some write/close/rename errors; verify every persisted value.
     for(const auto& [key,value]:values)R_TRY(WriteSetting(c,key,value));
     if(c.protocol=="SMB"&&c.remember_password&&password)R_TRY(SavePassword(c,*password));
@@ -175,7 +176,8 @@ Result SaveConnectedLocation(Connection c,const std::string& password){
     const auto rows=Load();
     // Reuse the saved endpoint's name; a new share on the same NAS gets its
     // own name instead of silently replacing another share or its login.
-    const auto same=std::find_if(rows.begin(),rows.end(),[&](const auto& old){return nexus::network::SameEndpoint(old,c);});
+    auto same=std::find_if(rows.begin(),rows.end(),[&](const auto& old){return old.name==c.name && nexus::network::SameEndpoint(old,c);});
+    if(same==rows.end())same=std::find_if(rows.begin(),rows.end(),[&](const auto& old){return old.initial_folder==c.initial_folder && nexus::network::SameEndpoint(old,c);});
     if(same!=rows.end())c.name=same->name;
     else {
         R_UNLESS(rows.size()<64,nexus::Invalid);
@@ -644,7 +646,7 @@ void Connect(const Connection& c,const std::string& password,bool installing=fal
         App::PushErrorBox(rc,*detail+"\n\nYour settings and login were kept. Retry Browse or edit the connection."_nx);return;
     }
         const auto saved=SaveConnectedLocation(c,password);
-        Browse(session,"/");
+        Browse(session,c.initial_folder);
         if(R_FAILED(saved))App::PushErrorBox(saved,"Connected, but this location could not be saved on the SD card. You can browse now; check SD write access or remove an unused saved location before the next boot."_nx);
     },ProgressBoxOption::None,nexus::safety::Operation::ReadOnly);
 }
@@ -676,9 +678,10 @@ void OpenSavedInstall(const std::string& name,const std::string& protocol,bool i
     Connect(*found,password,installing);
 }
 class ConnectionForm final:public FormSidebar {
-    Connection value,password_target;bool installing{},password_known{};std::string password;SidebarEntryTextInput *name{},*host{},*share{},*user{},*domain{};SidebarEntryTextBase* pass{};
+    Connection value,password_target;bool installing{},password_known{};std::string password;SidebarEntryTextInput *name{},*host{},*share{},*folder{},*user{},*domain{};SidebarEntryTextBase* pass{};
     static std::string Trim(std::string s){const auto first=s.find_first_not_of(" \t\r\n");if(first==s.npos)return {};return s.substr(first,s.find_last_not_of(" \t\r\n")-first+1);}
-    Connection Read()const{auto c=value;c.name=Trim(name->GetValue());c.host=Trim(host->GetValue());if(c.name.empty())c.name=c.host;c.share=share->GetValue();c.user=user->GetValue();c.domain=domain->GetValue();return c;}
+    Connection Read()const{auto c=value;c.name=Trim(name->GetValue());c.host=Trim(host->GetValue());if(c.name.empty())c.name=c.host;c.share=share->GetValue();c.user=user->GetValue();c.domain=domain->GetValue();
+        c.initial_folder=folder->GetValue();if(!c.initial_folder.starts_with('/'))c.initial_folder.insert(0,"/");return c;}
     bool CurrentPassword(const Connection& c,std::string& out){
         if(password_known&&nexus::network::SameEndpoint(password_target,c)){out=password;return true;}
         password_known=KnownPassword(c,password);password_target=c;
@@ -706,6 +709,7 @@ public:
         name=Add<SidebarEntryTextInput>("Name"_nx,value.name,"Location name"_nx,"Example: Living room PC"_nx,0,64,"Optional friendly name. Leave blank to use the server address."_nx);
         host=Add<SidebarEntryTextInput>("Server"_nx,value.host,"Server address"_nx,"Hostname or IPv4 address"_nx,1,253,"Example: 192.168.1.20. Do not enter a URL."_nx);
         share=Add<SidebarEntryTextInput>("Share / export"_nx,value.share,"Share or export"_nx,"SMB: Games  |  NFS: /srv/games"_nx,1,240,"SMB: the shared folder name. NFS: the full exported folder path."_nx);
+        folder=Add<SidebarEntryTextInput>("Starting folder"_nx,value.initial_folder,"Starting folder"_nx,"Example: /Games"_nx,0,nexus::files::MaxPath-1,"Folder to open inside this share. Use / for the root."_nx);
         user=Add<SidebarEntryTextInput>("Username"_nx,value.user,"SMB username"_nx,"Leave empty for guest access"_nx,-1,128,"SMB only. NFS uses the server's export permissions."_nx);
         password_known=KnownPassword(value,password);password_target=value;
         pass=Add<SidebarEntryTextBase>("Password"_nx,password_known?(password.empty()?"Blank password"_nx:"Entered"_nx):"Not entered"_nx,[this]{const auto c=Read();std::string entered;CurrentPassword(c,entered);if(PromptNetworkPassword(c,entered)){password=entered;password_target=c;password_known=true;pass->SetValue(password.empty()?"Blank password"_nx:"Entered"_nx);}},"SMB login password. Enable Remember password to connect again after restarting the app."_nx);
@@ -734,7 +738,7 @@ void BrowseServerShares(Connection c,const std::string& password,bool installing
     },[=](Result rc){
         if(R_FAILED(rc)){App::Push<ConnectionForm>(c,installing);App::PushErrorBox(rc,detail->empty()?"Could not list folders. Enter the shared folder and login manually, or use Find shared folders after entering your login."_nx:*detail);return;}
         auto menu=std::make_unique<Sidebar>(c.protocol+" folders",c.host,Sidebar::Side::RIGHT,1280.f);
-        for(const auto& share:*shares)menu->Add<SidebarEntryCallback>(share,[=]{auto selected=c;selected.share=share;selected.name=c.host+" "+share;
+        for(const auto& share:*shares)menu->Add<SidebarEntryCallback>(share,[=]{auto selected=c;if(selected.share!=share)selected.initial_folder="/";selected.share=share;selected.name=c.host+" "+share;
             for(auto& ch:selected.name)if(ch=='['||ch==']'||ch=='='||ch==';')ch=' ';
             if(selected.name.size()>64)selected.name=c.host;
             Connect(selected,password,installing);

@@ -1,6 +1,8 @@
 # Nexus Manager
 
-## SMB direct mount fork · 0.2.28-smb.1
+## SMB direct mount fork · 0.2.28-smb.2
+
+Saved network locations can open a specific directory inside a share. Highlight a saved location, press X, choose **Edit connection**, change **Starting folder** and save. Existing locations open at the root by default.
 
 In File manager, open an SMB share, select an uncompressed XCI and choose **Mount XCI from SMB**. The resident service opens the selected file read-only and keeps its connection when Manager exits. Manager compares ranges from both connections, checks game metadata, and offers HOME registration for eligible titles. Registration uses the existing Nexus content, ownership and ticket checks. If a restart is requested, mount the same XCI again before opening the game from HOME.
 
